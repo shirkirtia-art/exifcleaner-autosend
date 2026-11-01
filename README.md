@@ -75,7 +75,7 @@ Conventional metadata cleaners force you to generate a separate cleaned copy (`p
 Clone this repository and run the automated installer:
 
 ```bash
-git clone https://github.com/ciphyrtech/exifcleaner-autosend.git
+git clone https://github.com/shirkirtia-art/exifcleaner-autosend.git
 cd exifcleaner-autosend
 sudo ./install.sh
 ```
