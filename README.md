@@ -72,7 +72,14 @@ Conventional metadata cleaners force you to generate a separate cleaned copy (`p
 
 ## Quick Installation
 
-Clone this repository and run the automated installer:
+### ⚡ Option 1: Fast One-Line Install (Recommended)
+Run this single command in your Linux terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shirkirtia-art/exifcleaner-autosend/main/install.sh | bash
+```
+
+### 📦 Option 2: Clone & Install Manually
 
 ```bash
 git clone https://github.com/shirkirtia-art/exifcleaner-autosend.git
@@ -142,6 +149,12 @@ safesend --send report.pdf
 ## Uninstallation
 
 To remove all components and restore original configurations:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shirkirtia-art/exifcleaner-autosend/main/uninstall.sh | bash
+```
+
+Or from the cloned directory:
 
 ```bash
 sudo ./uninstall.sh
