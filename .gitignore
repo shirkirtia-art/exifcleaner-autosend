@@ -1,0 +1,23 @@
+# Build outputs
+build/
+*.so
+*.o
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Temporary & session files
+/tmp/
+.clean_send/
+*.log
+core
+core.*
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
