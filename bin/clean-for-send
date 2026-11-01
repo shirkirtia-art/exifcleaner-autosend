@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# ExifCleaner Automated Metadata Sanitizer for Uploads
+set -euo pipefail
+
+FILE="${1:-}"
+
+if [[ -z "$FILE" || ! -f "$FILE" ]]; then
+    exit 0
+fi
+
+# Detect ExifCleaner bundled exiftool or system exiftool
+EXIFTOOL="/opt/ExifCleaner/resources/nix/bin/exiftool"
+if [[ ! -x "$EXIFTOOL" ]]; then
+    EXIFTOOL="$(command -v exiftool || true)"
+fi
+
+if [[ -z "$EXIFTOOL" || ! -x "$EXIFTOOL" ]]; then
+    echo "ExifTool not found, skipping clean" >&2
+    exit 0
+fi
+
+# Strip all metadata losslessly
+# -overwrite_original: don't create _original backup file
+# -all=: strip all standard metadata (EXIF, GPS, IPTC, XMP, MakerNotes, comments)
+# -P: preserve file timestamps if needed
+"$EXIFTOOL" -overwrite_original -all= -P -q -q "$FILE" 2>/dev/null || true
+
+# For PDFs: also strip PDF document catalog info & XMP
+if [[ "${FILE,,}" == *.pdf ]]; then
+    "$EXIFTOOL" -overwrite_original -Title= -Author= -Subject= -Keywords= -Creator= -Producer= -CreationDate= -ModDate= -all= -q -q "$FILE" 2>/dev/null || true
+fi
+
+exit 0

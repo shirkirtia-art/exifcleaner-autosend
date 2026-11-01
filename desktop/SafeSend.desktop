@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=SafeSend Drop-Zone
+Comment=Drop files here to clean metadata on-the-fly and auto-purge once sent
+Exec=nemo %h/Desktop/SafeSend
+Icon=security-high
+Terminal=false
+Categories=Utility;Graphics;Security;
+StartupNotify=false

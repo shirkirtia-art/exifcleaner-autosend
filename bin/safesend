@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# SafeSend CLI - ExifCleaner Automation Suite
+set -euo pipefail
+
+usage() {
+    echo "Usage: safesend [OPTION] [FILE]"
+    echo "Clean metadata on-the-fly and prepare for safe upload without keeping duplicates."
+    echo ""
+    echo "Options:"
+    echo "  --status      Check status of SafeSend auto-clean automation services"
+    echo "  --clean FILE  Clean a file in-place"
+    echo "  --send FILE   Prepare ephemeral cleaned file and copy to clipboard"
+    echo "  --help        Display this help message"
+    echo ""
+    echo "Drop-Zone: Drag any file to ~/Desktop/SafeSend to auto-clean and auto-purge after send."
+    exit 0
+}
+
+cmd="${1:-}"
+
+if [[ -z "$cmd" || "$cmd" == "--help" || "$cmd" == "-h" ]]; then
+    usage
+elif [[ "$cmd" == "--status" ]]; then
+    echo "=== SafeSend & ExifCleaner Automation Status ==="
+    echo -n "1. GTK / Syscall Interceptor:     "
+    if [[ -f /usr/local/lib/libcleanupload.so ]]; then
+        echo "Active (/usr/local/lib/libcleanupload.so)"
+    else
+        echo "Missing!"
+    fi
+    echo -n "2. Portal Daemon Integration:     "
+    if systemctl --user is-active xdg-desktop-portal-gtk.service >/dev/null 2>&1; then
+        echo "Running"
+    else
+        echo "Inactive"
+    fi
+    echo -n "3. Desktop SafeSend Drop-Zone:    "
+    if systemctl --user is-active safesend-watcher.service >/dev/null 2>&1; then
+        echo "Running (~/Desktop/SafeSend)"
+    else
+        echo "Inactive"
+    fi
+    echo -n "4. Clipboard Auto-Sanitizer:      "
+    if systemctl --user is-active safesend-clipboard.service >/dev/null 2>&1; then
+        echo "Running (Screenshots & Copied Files)"
+    else
+        echo "Inactive"
+    fi
+    echo -n "5. Core Cleaning Engine:          "
+    if [[ -x /usr/local/bin/clean-for-send ]]; then
+        echo "Ready (ExifTool / ExifCleaner)"
+    else
+        echo "Missing!"
+    fi
+    echo "================================================"
+    exit 0
+elif [[ "$cmd" == "--clean" ]]; then
+    target="${2:-}"
+    if [[ -z "$target" || ! -f "$target" ]]; then
+        echo "Error: file not found: $target" >&2
+        exit 1
+    fi
+    /usr/local/bin/clean-for-send "$target"
+    echo "Cleaned metadata for: $target"
+    exit 0
+elif [[ "$cmd" == "--send" ]]; then
+    target="${2:-}"
+    if [[ -z "$target" || ! -f "$target" ]]; then
+        echo "Error: file not found: $target" >&2
+        exit 1
+    fi
+    /usr/local/bin/clean-clipboard-send "$target"
+    exit 0
+elif [[ -f "$cmd" ]]; then
+    /usr/local/bin/clean-clipboard-send "$cmd"
+    exit 0
+else
+    usage
+fi

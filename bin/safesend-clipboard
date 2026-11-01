@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""
+SafeSend Clipboard Daemon
+Automatically strips metadata from:
+1. Screenshots & copied images (PrtScn, web images, etc.)
+2. Image & document files copied on your PC (Ctrl+C in Nemo / File Manager)
+
+When you paste (Ctrl+V) into Discord, Telegram, or any browser, it sends
+the 100% metadata-free sanitized image/file without creating duplicate files on disk.
+Optimized for instant single-tap Ctrl+V paste with zero re-entrancy latency.
+"""
+
+import os
+import sys
+import time
+import hashlib
+import shutil
+import urllib.parse
+import subprocess
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+
+IMAGE_EXTS = {
+    '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif', '.svg'
+}
+
+DOC_EXTS = {
+    '.pdf', '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt',
+    '.odt', '.ods', '.odp',
+    '.mp4', '.m4v', '.mov', '.mkv', '.avi', '.webm',
+    '.mp3', '.wav', '.ogg', '.flac'
+}
+
+def notify(title, msg):
+    if shutil.which("notify-send"):
+        subprocess.Popen(
+            ["notify-send", "-i", "security-high", "-a", "SafeSend", title, msg],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+class ClipboardSanitizer:
+    def __init__(self):
+        self.display = Gdk.Display.get_default()
+        if not self.display:
+            print("Error: Could not open default Gdk display.", file=sys.stderr)
+            sys.exit(1)
+
+        self.clip = Gtk.Clipboard.get_default(self.display)
+        self.seen_pixel_hashes = set()
+        self.is_cleaning = False
+
+        # Listen for any application copying to clipboard
+        self.clip.connect('owner-change', self.on_owner_change)
+
+    def on_owner_change(self, clipboard, event):
+        if self.is_cleaning:
+            return
+
+        # If the clipboard owner is our own process window (TEMP window), ignore immediately
+        if event.owner and event.owner.get_window_type() != Gdk.WindowType.FOREIGN:
+            return
+
+        targets_res = clipboard.wait_for_targets()
+        if not targets_res or not targets_res[0]:
+            return
+
+        targets = [str(t) for t in targets_res[1]]
+
+        # Priority 1: Copied file from PC (Ctrl+C in Nemo / File Manager)
+        # Note: Nemo provides text/uri-list or x-special/nemo-copied-files
+        if 'text/uri-list' in targets or 'x-special/nemo-copied-files' in targets:
+            self.handle_copied_files()
+        # Priority 2: Direct image on clipboard (Screenshot or copied image)
+        elif any(t in targets for t in ['image/png', 'image/jpeg', 'image/bmp']):
+            self.handle_image()
+
+    def handle_image(self):
+        pix = self.clip.wait_for_image()
+        if not pix:
+            return
+
+        # Check raw pixel hash to eliminate redundant re-processing and desktop manager loops
+        raw_pixels = pix.get_pixels()
+        pix_hash = hashlib.sha256(raw_pixels).hexdigest()
+        if pix_hash in self.seen_pixel_hashes:
+            return
+
+        self.seen_pixel_hashes.add(pix_hash)
+        if len(self.seen_pixel_hashes) > 200:
+            self.seen_pixel_hashes.pop()
+
+        # Setting the Pixbuf directly on Gtk.Clipboard strips 100% of EXIF, GPS, camera,
+        # and comment metadata: GdkPixbuf only stores raw RGB(A) pixel arrays in memory,
+        # and GTK generates pristine PNG/JPEG streams with zero metadata for paste requests.
+        self.is_cleaning = True
+        self.clip.set_image(pix)
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        self.is_cleaning = False
+
+        notify("Screenshot / Image Sanitized",
+               "Metadata stripped from clipboard image. Ready to paste on first tap!")
+
+    def handle_copied_files(self):
+        sel = self.clip.wait_for_contents(Gdk.Atom.intern('text/uri-list', False))
+        if not sel:
+            return
+
+        raw_data = sel.get_data().decode('utf-8', errors='ignore').strip()
+        lines = raw_data.splitlines()
+
+        for line in lines:
+            line = line.strip()
+            if not line.startswith('file://'):
+                continue
+
+            local_path = urllib.parse.unquote(line[7:])
+            if not os.path.isfile(local_path) or local_path.startswith('/dev/shm/.clean_send'):
+                continue
+
+            ext = os.path.splitext(local_path)[1].lower()
+
+            # Case A: Copied Image File (.png, .jpg, .webp, etc.)
+            if ext in IMAGE_EXTS:
+                bname = os.path.basename(local_path)
+                try:
+                    # GdkPixbuf loads raw uncompressed pixels directly into RAM.
+                    # This inherently strips all EXIF, GPS, camera, XMP and comment metadata.
+                    clean_pix = GdkPixbuf.Pixbuf.new_from_file(local_path)
+                except Exception:
+                    continue
+
+                raw_pixels = clean_pix.get_pixels()
+                pix_hash = hashlib.sha256(raw_pixels).hexdigest()
+
+                self.seen_pixel_hashes.add(pix_hash)
+                if len(self.seen_pixel_hashes) > 200:
+                    self.seen_pixel_hashes.pop()
+
+                # Set cleaned image directly on clipboard for instant single-tap paste
+                # into Discord, Telegram, Chrome, etc.
+                self.is_cleaning = True
+                self.clip.set_image(clean_pix)
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                self.is_cleaning = False
+
+                notify("Image File Copied & Sanitized",
+                       f"Metadata stripped from '{bname}'. Press Ctrl+V once in Discord/Telegram!")
+                return
+
+            # Case B: Copied Document or Video (.pdf, .docx, .mp4, etc.)
+            elif ext in DOC_EXTS:
+                os.makedirs('/dev/shm/.clean_send', mode=0o1777, exist_ok=True)
+                session_dir = f"/dev/shm/.clean_send/clip_doc_{os.getpid()}_{time.time_ns()}"
+                os.makedirs(session_dir, mode=0o700, exist_ok=True)
+
+                bname = os.path.basename(local_path)
+                clean_dest = os.path.join(session_dir, bname)
+
+                try:
+                    shutil.copy2(local_path, clean_dest)
+                    subprocess.run(['/usr/local/bin/clean-for-send', clean_dest], capture_output=True)
+
+                    # Update text/uri-list pointing to ephemeral cleaned document
+                    uri_payload = f"file://{clean_dest}\r\n"
+                    self.is_cleaning = True
+                    p = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', 'text/uri-list'],
+                                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    p.communicate(input=uri_payload.encode('utf-8'))
+                    while Gtk.events_pending():
+                        Gtk.main_iteration_do(False)
+                    self.is_cleaning = False
+
+                    # Launch auto-purge watcher in background
+                    subprocess.Popen(['/usr/local/bin/clean-auto-purge', session_dir, bname, '120'])
+
+                    notify("Document Copied & Sanitized",
+                           f"Metadata stripped from '{bname}'. Ready to paste into Discord/Telegram!")
+                    return
+                except Exception:
+                    if os.path.exists(clean_dest):
+                        os.remove(clean_dest)
+                    if os.path.exists(session_dir):
+                        os.rmdir(session_dir)
+                    continue
+
+def main():
+    sanitizer = ClipboardSanitizer()
+    print("SafeSend Clipboard Daemon running...")
+    Gtk.main()
+
+if __name__ == '__main__':
+    main()

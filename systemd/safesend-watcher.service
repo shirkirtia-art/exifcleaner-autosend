@@ -1,0 +1,16 @@
+[Unit]
+Description=SafeSend Drop-Zone Auto-Clean & Auto-Purge Service
+Documentation=https://github.com/ciphyrtech/exifcleaner-autosend
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/safesend-watcher %h/Desktop/SafeSend
+Restart=always
+RestartSec=3
+Environment="DISPLAY=:0"
+Environment="XDG_RUNTIME_DIR=/run/user/%U"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"
+
+[Install]
+WantedBy=default.target

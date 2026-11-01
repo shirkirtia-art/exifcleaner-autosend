@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Auto-purge ephemeral cleaned files after upload completes
+SESSION_DIR="${1:-}"
+FILENAME="${2:-}"
+TIMEOUT="${3:-120}"
+
+if [[ -z "$SESSION_DIR" || ! -d "$SESSION_DIR" ]]; then
+    exit 0
+fi
+
+TARGET="$SESSION_DIR/$FILENAME"
+
+# Function to safely wipe session directory
+do_cleanup() {
+    if [[ -d "$SESSION_DIR" && "$SESSION_DIR" == /dev/shm/.clean_send/* ]]; then
+        rm -rf "$SESSION_DIR"
+    fi
+}
+
+# If no specific file, wait timeout and clean
+if [[ -z "$FILENAME" || ! -f "$TARGET" ]]; then
+    sleep "$TIMEOUT"
+    do_cleanup
+    exit 0
+fi
+
+# Wait for application to read/upload the file (CLOSE_NOWRITE event)
+# Timeout fallback prevents orphaned files if user closes file dialog or cancels
+inotifywait -e close_nowrite,close_write -t "$TIMEOUT" "$TARGET" >/dev/null 2>&1 || true
+
+# Wait until no active process is reading the file descriptor
+for _ in {1..30}; do
+    if command -v fuser >/dev/null 2>&1; then
+        if ! fuser "$TARGET" >/dev/null 2>&1; then
+            break
+        fi
+    fi
+    sleep 1
+done
+
+# Short safety buffer (10 seconds) for network socket flush / multi-part upload chunks
+sleep 10
+
+# Final cleanup: removes ephemeral copy so no duplicate exists
+do_cleanup
+exit 0

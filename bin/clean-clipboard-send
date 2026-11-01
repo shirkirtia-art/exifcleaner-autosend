@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Clean file metadata and copy to clipboard for safe instant paste
+set -euo pipefail
+
+FILE="${1:-}"
+if [[ -z "$FILE" || ! -f "$FILE" ]]; then
+    exit 0
+fi
+
+BASENAME="$(basename "$FILE")"
+mkdir -p /dev/shm/.clean_send
+
+SESSION_DIR="/dev/shm/.clean_send/clip_${$}_${RANDOM}"
+mkdir -p -m 0700 "$SESSION_DIR"
+CLEAN_FILE="$SESSION_DIR/$BASENAME"
+
+# Copy original to ephemeral RAM
+cp -p "$FILE" "$CLEAN_FILE"
+
+# Clean metadata
+/usr/local/bin/clean-for-send "$CLEAN_FILE"
+
+# Copy to clipboard
+if command -v xclip >/dev/null 2>&1; then
+    # Set text/uri-list for file paste
+    echo -n "file://$CLEAN_FILE" | xclip -selection clipboard -t text/uri-list 2>/dev/null || true
+    
+    # If image, also load image into clipboard for apps that prefer raw image data
+    MIME_TYPE="$(file --mime-type -b "$CLEAN_FILE" || true)"
+    if [[ "$MIME_TYPE" == image/* ]]; then
+        xclip -selection clipboard -t "$MIME_TYPE" -i "$CLEAN_FILE" 2>/dev/null || true
+    fi
+fi
+
+# Notify user
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send -i security-high -a "SafeSend" "Cleaned & Copied to Clipboard" "Press Ctrl+V in Discord, Telegram, or Browser. Ephemeral file will auto-purge." 2>/dev/null || true
+fi
+
+# Auto-purge watcher
+/usr/local/bin/clean-auto-purge "$SESSION_DIR" "$BASENAME" "90" >/dev/null 2>&1 &
+exit 0

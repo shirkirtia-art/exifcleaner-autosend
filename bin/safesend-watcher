@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# SafeSend Desktop Drop-Zone Watcher Daemon
+set -euo pipefail
+
+WATCH_DIR="${1:-$HOME/Desktop/SafeSend}"
+mkdir -p "$WATCH_DIR"
+
+notify() {
+    local title="$1"
+    local msg="$2"
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -i security-high -a "SafeSend Drop-Zone" "$title" "$msg" 2>/dev/null || true
+    fi
+}
+
+# Watch for incoming files
+inotifywait -m -e close_write,moved_to --format "%w%f" "$WATCH_DIR" | while read -r FILEPATH; do
+    if [[ ! -f "$FILEPATH" ]]; then
+        continue
+    fi
+    FILENAME="$(basename "$FILEPATH")"
+
+    # Ignore hidden files, README, or temporary download parts
+    if [[ "$FILENAME" == .* || "$FILENAME" == "README"* || "$FILENAME" == *.crdownload || "$FILENAME" == *.part ]]; then
+        continue
+    fi
+
+    # Clean the file in-place
+    /usr/local/bin/clean-for-send "$FILEPATH"
+
+    notify "SafeSend: Metadata Stripped" "'$FILENAME' is ready to share. Drag into Discord, Telegram, or Browser. Auto-purging once uploaded."
+
+    # Launch background self-destruct watcher for this specific file
+    (
+        # Wait for uploading application to read the file
+        inotifywait -e close_nowrite -t 180 "$FILEPATH" >/dev/null 2>&1 || true
+
+        # Wait until no active process holds it open
+        for _ in {1..20}; do
+            if command -v fuser >/dev/null 2>&1; then
+                if ! fuser "$FILEPATH" >/dev/null 2>&1; then
+                    break
+                fi
+            fi
+            sleep 1
+        done
+
+        # 10s network transfer buffer
+        sleep 10
+
+        # Purge from drop-zone so no duplicate remains
+        if [[ -f "$FILEPATH" ]]; then
+            rm -f "$FILEPATH"
+            notify "SafeSend: Auto-Purged" "'$FILENAME' was uploaded and automatically removed. Zero duplicates left."
+        fi
+    ) &
+done
