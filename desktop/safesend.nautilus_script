@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Nautilus Script for SafeSend
+/usr/local/bin/clean-clipboard-send "$@"

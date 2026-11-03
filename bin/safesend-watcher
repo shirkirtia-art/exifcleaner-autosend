@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
+# ==============================================================================
 # SafeSend Desktop Drop-Zone Watcher Daemon
+# Automatically sanitizes files dropped into ~/Desktop/SafeSend in-place.
+# Guarantees zero data loss: files remain intact and ready for safe upload.
+# ==============================================================================
 set -euo pipefail
 
 WATCH_DIR="${1:-$HOME/Desktop/SafeSend}"
@@ -13,45 +17,37 @@ notify() {
     fi
 }
 
-# Watch for incoming files
-inotifywait -m -e close_write,moved_to --format "%w%f" "$WATCH_DIR" | while read -r FILEPATH; do
+CLEAN_BIN="/usr/local/bin/clean-for-send"
+if [[ ! -x "$CLEAN_BIN" ]]; then
+    CLEAN_BIN="$(dirname "$(realpath "$0")")/clean-for-send"
+fi
+
+# Track recently cleaned files to avoid re-trigger loops from inotify close_write
+declare -A PROCESSED_FILES
+
+# Watch for newly created, moved, or written files
+inotifywait -m -e close_write,moved_to --format "%w%f" "$WATCH_DIR" 2>/dev/null | while read -r FILEPATH; do
     if [[ ! -f "$FILEPATH" ]]; then
         continue
     fi
     FILENAME="$(basename "$FILEPATH")"
 
-    # Ignore hidden files, README, or temporary download parts
-    if [[ "$FILENAME" == .* || "$FILENAME" == "README"* || "$FILENAME" == *.crdownload || "$FILENAME" == *.part ]]; then
+    # Ignore hidden files, README, or partial download files
+    if [[ "$FILENAME" == .* || "$FILENAME" == "README"* || "$FILENAME" == *.crdownload || "$FILENAME" == *.part || "$FILENAME" == *.tmp* ]]; then
         continue
     fi
 
-    # Clean the file in-place
-    /usr/local/bin/clean-for-send "$FILEPATH"
+    # Check if this file was modified by our own clean pass within the last 5 seconds
+    FILE_MTIME="$(stat -c %Y "$FILEPATH" 2>/dev/null || echo 0)"
+    LAST_CLEAN="${PROCESSED_FILES["$FILEPATH"]:-0}"
+    if (( FILE_MTIME - LAST_CLEAN < 4 && LAST_CLEAN > 0 )); then
+        continue
+    fi
 
-    notify "SafeSend: Metadata Stripped" "'$FILENAME' is ready to share. Drag into Discord, Telegram, or Browser. Auto-purging once uploaded."
+    PROCESSED_FILES["$FILEPATH"]="$FILE_MTIME"
 
-    # Launch background self-destruct watcher for this specific file
-    (
-        # Wait for uploading application to read the file
-        inotifywait -e close_nowrite -t 180 "$FILEPATH" >/dev/null 2>&1 || true
-
-        # Wait until no active process holds it open
-        for _ in {1..20}; do
-            if command -v fuser >/dev/null 2>&1; then
-                if ! fuser "$FILEPATH" >/dev/null 2>&1; then
-                    break
-                fi
-            fi
-            sleep 1
-        done
-
-        # 10s network transfer buffer
-        sleep 10
-
-        # Purge from drop-zone so no duplicate remains
-        if [[ -f "$FILEPATH" ]]; then
-            rm -f "$FILEPATH"
-            notify "SafeSend: Auto-Purged" "'$FILENAME' was uploaded and automatically removed. Zero duplicates left."
-        fi
-    ) &
+    # Clean the file in-place losslessly
+    if "$CLEAN_BIN" "$FILEPATH"; then
+        notify "SafeSend: Metadata Stripped" "'$FILENAME' is sanitized and ready to share safely!"
+    fi
 done

@@ -103,11 +103,22 @@ static int s_cache_idx = 0;
 static pthread_mutex_t s_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void init_real_dlsym(void) {
+    if (real_dlsym) return;
+    static const char *const versions[] = {
+        "GLIBC_2.34",
+        "GLIBC_2.2.5",
+        "GLIBC_2.17",
+        "GLIBC_2.4",
+        "GLIBC_2.0",
+        "GLIBC_2.27",
+        NULL
+    };
+    for (int i = 0; versions[i] != NULL; i++) {
+        real_dlsym = (dlsym_fn_t)dlvsym(RTLD_NEXT, "dlsym", versions[i]);
+        if (real_dlsym) break;
+    }
     if (!real_dlsym) {
-        real_dlsym = (dlsym_fn_t)dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
-        if (!real_dlsym) {
-            real_dlsym = (dlsym_fn_t)dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.34");
-        }
+        real_dlsym = (dlsym_fn_t)dlvsym(RTLD_DEFAULT, "dlsym", "GLIBC_2.34");
     }
 }
 
@@ -322,6 +333,10 @@ char *prepare_cleaned_file(const char *orig_path) {
     } else if (cpid > 0) {
         int status;
         waitpid(cpid, &status, 0);
+    } else {
+        /* Fork failed (e.g. seccomp sandbox restriction) - fall back safely */
+        rmdir(session_dir);
+        return (char *)orig_path;
     }
 
     /* Update cache */
@@ -344,17 +359,7 @@ char *prepare_cleaned_file(const char *orig_path) {
                 dup2(devnull, STDERR_FILENO);
                 close(devnull);
             }
-            char notif_msg[256];
-            snprintf(notif_msg, sizeof(notif_msg), "Metadata stripped from '%s' for safe upload. Auto-purging once sent.", bname);
-            pid_t npid = fork();
-            if (npid == 0) {
-                execl("/usr/bin/notify-send", "notify-send", "-i", "security-high",
-                      "-a", "ExifCleaner", "ExifCleaner Auto-Clean", notif_msg, (char *)NULL);
-                _exit(0);
-            }
-            if (npid > 0) waitpid(npid, NULL, 0);
-
-            execl("/usr/local/bin/clean-auto-purge", "clean-auto-purge", session_dir, bname, "120", (char *)NULL);
+            execl("/usr/local/bin/clean-auto-purge", "clean-auto-purge", session_dir, bname, "600", (char *)NULL);
             _exit(0);
         }
         _exit(0);
@@ -726,7 +731,10 @@ void *dlsym(void *handle, const char *symbol) {
     if (strcmp(symbol, "openat") == 0) return (void *)openat;
     if (strcmp(symbol, "openat64") == 0) return (void *)openat64;
 
-    return real_dlsym(handle, symbol);
+    if (real_dlsym) {
+        return real_dlsym(handle, symbol);
+    }
+    return NULL;
 }
 
 #pragma GCC diagnostic pop

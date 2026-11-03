@@ -34,6 +34,8 @@ if [[ -n "$USER_HOME" && -d "$USER_HOME" ]]; then
     rm -f "$USER_HOME/.config/systemd/user/safesend-clipboard.service"
     rm -rf "$USER_HOME/.config/systemd/user/xdg-desktop-portal-gtk.service.d"
     rm -f "$USER_HOME/.local/share/nemo/actions/safesend.nemo_action"
+    rm -f "$USER_HOME/.local/share/nautilus/scripts/Safe Send (Strip Metadata & Copy)"
+    rm -f "$USER_HOME/.local/share/kio/servicemenus/safesend.desktop"
 fi
 
 if [[ -d "$USER_RUNTIME" && "$TARGET_USER" != "root" ]]; then
@@ -49,6 +51,7 @@ rm -f /usr/local/bin/clean-clipboard-send
 rm -f /usr/local/bin/safesend
 rm -f /usr/local/bin/safesend-watcher
 rm -f /usr/local/bin/safesend-clipboard
+rm -f /usr/share/applications/SafeSend.desktop
 
 # Remove wrappers if they point to libcleanupload
 for bin in google-chrome-stable google-chrome discord telegram-desktop; do

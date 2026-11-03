@@ -54,9 +54,9 @@ Conventional metadata cleaners force you to generate a separate cleaned copy (`p
 - **Zero Duplicate Files:** Never generates persistent clutter like `file_clean.png`. Cleaned files reside in memory and self-destruct once uploaded.
 - **Originals Preserved:** Your personal photos and documents on disk are never altered or damaged.
 - **0% Idle CPU Usage:** Event-driven architecture using Linux kernel `inotify`; completely dormant until you initiate an upload.
-- **Desktop Drop-Zone:** Includes a `~/Desktop/SafeSend` folder for drag-and-drop sharing with automatic 3-minute self-destruct.
+- **Desktop Drop-Zone:** Includes a `~/Desktop/SafeSend` folder for drag-and-drop sharing with instant in-place sanitization.
 - **Automated Clipboard & Screenshot Sanitization:** Wakes up instantly when you take a screenshot (e.g. PrtScn) or copy an image/file, stripping all metadata in-place before you hit paste (`Ctrl+V`).
-- **Nemo Context Menu:** Right-click any file in Nemo &rarr; *"Safe Send (Strip Metadata & Copy)"* to immediately paste sanitized files via `Ctrl+V`.
+- **File Manager Integration:** Right-click context actions for Nemo and Nautilus &rarr; *"Safe Send (Strip Metadata & Copy)"* to immediately paste sanitized files via `Ctrl+V`.
 
 ---
 
@@ -112,14 +112,14 @@ Click **Attach**, **Upload**, or the `+` paperclip in Discord, Chrome, Telegram,
 Drag any photo or document from your file manager directly into your Discord channel or browser chat window. The interceptor catches the read call, cleans the file in RAM, and uploads without leaving duplicates.
 
 ### 3. Desktop SafeSend Drop-Zone (`~/Desktop/SafeSend`)
-Drag files into the `SafeSend` folder on your desktop. The file is instantly cleaned in-place. Drag it from `SafeSend` into your app to send. Once uploaded, the file in `SafeSend` automatically deletes itself!
+Drag files into the `SafeSend` folder on your desktop. The file is instantly cleaned in-place. Drag it directly into your app to send without metadata!
 
 ### 4. Screenshots & Clipboard Copy-Paste (Fully Automatic)
 Take a screenshot using your preferred shortcut (e.g., <kbd>PrtScn</kbd>) or copy an image from any app. The clipboard daemon immediately intercepts and strips EXIF/GPS metadata from the clipboard image in RAM. When you press <kbd>Ctrl</kbd>+<kbd>V</kbd> in Discord, Telegram, or web chat, it pastes the clean, sanitized image!
 
-Similarly, if you copy any image or document file in your file manager (<kbd>Ctrl</kbd>+<kbd>C</kbd>), the clipboard automatically stages an ephemeral sanitized copy so pasting into Discord or Telegram sends the clean file without duplicates.
+Similarly, if you copy any image or document file in your file manager (<kbd>Ctrl</kbd>+<kbd>C</kbd>), the clipboard automatically stages an ephemeral sanitized copy in RAM so pasting into Discord or Telegram sends the clean file without duplicates.
 
-### 5. Right-Click Context Menu (Nemo)
+### 5. Right-Click Context Menu (Nemo & Nautilus)
 Right-click any file &rarr; select **"Safe Send (Strip Metadata & Copy for Upload)"**. The cleaned copy is placed on your clipboard. Press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste it into any chat.
 
 ### 6. Command-Line Utility
@@ -129,11 +129,14 @@ Check service status or clean files from your terminal:
 # Check status of all components
 safesend --status
 
-# Clean a file in-place
-safesend --clean sample.jpg
+# Clean one or more files in-place
+safesend --clean sample.jpg report.docx video.mp4
 
-# Prepare an ephemeral cleaned file and copy to clipboard
-safesend --send report.pdf
+# Prepare ephemeral cleaned files and copy to clipboard
+safesend --send report.pdf presentation.pptx
+
+# Clear ephemeral RAM cache and desktop drop-zone
+safesend --clear
 ```
 
 ---

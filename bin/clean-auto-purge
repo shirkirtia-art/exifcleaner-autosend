@@ -1,46 +1,84 @@
 #!/usr/bin/env bash
-# Auto-purge ephemeral cleaned files after upload completes
+# ==============================================================================
+# SafeSend Ephemeral Purge Manager
+# Manages ephemeral cleaned files in /dev/shm/.clean_send/
+# Safely purges temporary RAM copies after upload completes without premature deletion.
+# ==============================================================================
+set -euo pipefail
+
 SESSION_DIR="${1:-}"
 FILENAME="${2:-}"
-TIMEOUT="${3:-120}"
+TIMEOUT="${3:-600}" # Default: 10 minutes lifespan
+
+# Garbage collection mode for stale sessions (> 30 minutes old)
+if [[ "$SESSION_DIR" == "--gc" ]]; then
+    if [[ -d "/dev/shm/.clean_send" ]]; then
+        find /dev/shm/.clean_send -mindepth 1 -maxdepth 1 -type d -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+    fi
+    exit 0
+fi
 
 if [[ -z "$SESSION_DIR" || ! -d "$SESSION_DIR" ]]; then
     exit 0
 fi
 
-TARGET="$SESSION_DIR/$FILENAME"
-
-# Function to safely wipe session directory
+# Ensure cleanup only operates on valid SafeSend shm sessions
 do_cleanup() {
     if [[ -d "$SESSION_DIR" && "$SESSION_DIR" == /dev/shm/.clean_send/* ]]; then
         rm -rf "$SESSION_DIR"
     fi
 }
 
-# If no specific file, wait timeout and clean
+TARGET="$SESSION_DIR/$FILENAME"
+
+# If no target file, wait timeout and clean session
 if [[ -z "$FILENAME" || ! -f "$TARGET" ]]; then
     sleep "$TIMEOUT"
     do_cleanup
     exit 0
 fi
 
-# Wait for application to read/upload the file (CLOSE_NOWRITE event)
-# Timeout fallback prevents orphaned files if user closes file dialog or cancels
-inotifywait -e close_nowrite,close_write -t "$TIMEOUT" "$TARGET" >/dev/null 2>&1 || true
+# Run garbage collection on old stale sessions in the background
+if [[ -d "/dev/shm/.clean_send" ]]; then
+    find /dev/shm/.clean_send -mindepth 1 -maxdepth 1 -type d -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+fi
 
-# Wait until no active process is reading the file descriptor
-for _ in {1..30}; do
+# Monitor file access: wait for upload process to finish
+# We give a minimum session lifetime of 180 seconds, extending if active processes hold the file
+START_TIME="$(date +%s)"
+MIN_LIFETIME=180
+
+while true; do
+    NOW="$(date +%s)"
+    ELAPSED=$(( NOW - START_TIME ))
+
+    if (( ELAPSED >= TIMEOUT )); then
+        break
+    fi
+
+    # Check if any process currently holds the file open
+    IS_OPEN=0
     if command -v fuser >/dev/null 2>&1; then
-        if ! fuser "$TARGET" >/dev/null 2>&1; then
-            break
+        if fuser "$TARGET" >/dev/null 2>&1; then
+            IS_OPEN=1
         fi
     fi
-    sleep 1
+
+    # If the file is still held open by an uploading application, keep extending wait
+    if (( IS_OPEN == 1 )); then
+        sleep 5
+        continue
+    fi
+
+    # If file was closed but minimum lifetime hasn't elapsed, sleep remaining buffer
+    if (( ELAPSED < MIN_LIFETIME )); then
+        sleep 10
+        continue
+    fi
+
+    # No processes holding the file and minimum grace period has passed
+    break
 done
 
-# Short safety buffer (10 seconds) for network socket flush / multi-part upload chunks
-sleep 10
-
-# Final cleanup: removes ephemeral copy so no duplicate exists
 do_cleanup
 exit 0

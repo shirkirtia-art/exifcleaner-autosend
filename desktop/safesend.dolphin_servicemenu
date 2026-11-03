@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+MimeType=image/*;application/pdf;application/vnd.openxmlformats-officedocument.*;audio/*;video/*;
+Actions=SafeSend;
+X-KDE-Priority=TopLevel
+
+[Desktop Action SafeSend]
+Name=Safe Send (Strip Metadata & Copy)
+Icon=security-high
+Exec=/usr/local/bin/clean-clipboard-send %F

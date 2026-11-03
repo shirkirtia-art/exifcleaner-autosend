@@ -1,42 +1,82 @@
 #!/usr/bin/env bash
-# Clean file metadata and copy to clipboard for safe instant paste
+# ==============================================================================
+# SafeSend Clipboard Exporter
+# Sanitizes files into ephemeral RAM (/dev/shm) and loads them onto the clipboard.
+# Supports single or multiple files with full RFC 2483 URI-list compatibility.
+# ==============================================================================
 set -euo pipefail
 
-FILE="${1:-}"
-if [[ -z "$FILE" || ! -f "$FILE" ]]; then
+if [[ $# -eq 0 ]]; then
+    echo "Usage: clean-clipboard-send <file1> [file2...]" >&2
+    exit 1
+fi
+
+mkdir -p -m 01777 /dev/shm/.clean_send
+SESSION_DIR="/dev/shm/.clean_send/clip_${$}_${RANDOM}"
+mkdir -p -m 0700 "$SESSION_DIR"
+
+CLEAN_BIN="/usr/local/bin/clean-for-send"
+if [[ ! -x "$CLEAN_BIN" ]]; then
+    CLEAN_BIN="$(dirname "$(realpath "$0")")/clean-for-send"
+fi
+
+PURGE_BIN="/usr/local/bin/clean-auto-purge"
+if [[ ! -x "$PURGE_BIN" ]]; then
+    PURGE_BIN="$(dirname "$(realpath "$0")")/clean-auto-purge"
+fi
+
+URI_LIST=""
+CLEANED_COUNT=0
+FIRST_IMAGE=""
+
+for FILE in "$@"; do
+    if [[ ! -f "$FILE" ]]; then
+        continue
+    fi
+
+    BASENAME="$(basename "$FILE")"
+    CLEAN_FILE="$SESSION_DIR/$BASENAME"
+
+    # Copy original to ephemeral RAM
+    cp -p "$FILE" "$CLEAN_FILE"
+
+    # Sanitize metadata in-place in RAM
+    "$CLEAN_BIN" "$CLEAN_FILE"
+
+    URI_LIST+="${URI_LIST:+$'\r\n'}file://${CLEAN_FILE}"
+    CLEANED_COUNT=$(( CLEANED_COUNT + 1 ))
+
+    MIME_TYPE="$(file --mime-type -b "$CLEAN_FILE" 2>/dev/null || true)"
+    if [[ "$MIME_TYPE" == image/* && -z "$FIRST_IMAGE" ]]; then
+        FIRST_IMAGE="$CLEAN_FILE"
+    fi
+done
+
+if (( CLEANED_COUNT == 0 )); then
+    rm -rf "$SESSION_DIR"
     exit 0
 fi
 
-BASENAME="$(basename "$FILE")"
-mkdir -p /dev/shm/.clean_send
+# Append trailing CRLF per RFC 2483
+URI_PAYLOAD="${URI_LIST}"$'\r\n'
 
-SESSION_DIR="/dev/shm/.clean_send/clip_${$}_${RANDOM}"
-mkdir -p -m 0700 "$SESSION_DIR"
-CLEAN_FILE="$SESSION_DIR/$BASENAME"
-
-# Copy original to ephemeral RAM
-cp -p "$FILE" "$CLEAN_FILE"
-
-# Clean metadata
-/usr/local/bin/clean-for-send "$CLEAN_FILE"
-
-# Copy to clipboard
+# Set clipboard via xclip or python
 if command -v xclip >/dev/null 2>&1; then
-    # Set text/uri-list for file paste
-    echo -n "file://$CLEAN_FILE" | xclip -selection clipboard -t text/uri-list 2>/dev/null || true
-    
-    # If image, also load image into clipboard for apps that prefer raw image data
-    MIME_TYPE="$(file --mime-type -b "$CLEAN_FILE" || true)"
-    if [[ "$MIME_TYPE" == image/* ]]; then
-        xclip -selection clipboard -t "$MIME_TYPE" -i "$CLEAN_FILE" 2>/dev/null || true
-    fi
+    printf "%s" "$URI_PAYLOAD" | xclip -selection clipboard -t text/uri-list 2>/dev/null || true
 fi
 
 # Notify user
 if command -v notify-send >/dev/null 2>&1; then
-    notify-send -i security-high -a "SafeSend" "Cleaned & Copied to Clipboard" "Press Ctrl+V in Discord, Telegram, or Browser. Ephemeral file will auto-purge." 2>/dev/null || true
+    if (( CLEANED_COUNT == 1 )); then
+        notify-send -i security-high -a "SafeSend" "Cleaned & Copied to Clipboard" "Ready to paste (Ctrl+V) in Discord, Telegram, or Browser." 2>/dev/null || true
+    else
+        notify-send -i security-high -a "SafeSend" "${CLEANED_COUNT} Files Cleaned & Copied" "Ready to paste (Ctrl+V) in Discord, Telegram, or Browser." 2>/dev/null || true
+    fi
 fi
 
-# Auto-purge watcher
-/usr/local/bin/clean-auto-purge "$SESSION_DIR" "$BASENAME" "90" >/dev/null 2>&1 &
+# Launch auto-purge watcher in background with generous TTL (600s / 10 mins)
+if [[ -x "$PURGE_BIN" ]]; then
+    "$PURGE_BIN" "$SESSION_DIR" "" "600" >/dev/null 2>&1 &
+fi
+
 exit 0

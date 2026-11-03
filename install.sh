@@ -39,27 +39,36 @@ install_deps_apt() {
     apt-get install -y --no-install-recommends \
         build-essential gcc make \
         libimage-exiftool-perl \
+        ffmpeg \
         inotify-tools \
         xclip \
-        libnotify-bin
+        libnotify-bin \
+        python3-gi \
+        gir1.2-gtk-3.0
 }
 
 install_deps_dnf() {
     dnf install -y \
         gcc make \
         perl-Image-ExifTool \
+        ffmpeg \
         inotify-tools \
         xclip \
-        libnotify
+        libnotify \
+        python3-gobject \
+        gtk3
 }
 
 install_deps_pacman() {
     pacman -Sy --noconfirm --needed \
         base-devel gcc make \
         perl-image-exiftool \
+        ffmpeg \
         inotify-tools \
         xclip \
-        libnotify
+        libnotify \
+        python-gobject \
+        gtk3
 }
 
 if command -v apt-get >/dev/null 2>&1; then
@@ -69,13 +78,14 @@ elif command -v dnf >/dev/null 2>&1; then
 elif command -v pacman >/dev/null 2>&1; then
     install_deps_pacman
 else
-    echo -e "${YELLOW}Warning: Unknown package manager. Please ensure gcc, make, exiftool, inotify-tools, and xclip are installed.${NC}"
+    echo -e "${YELLOW}Warning: Unknown package manager. Please ensure gcc, make, exiftool, ffmpeg, inotify-tools, python3-gi, and xclip are installed.${NC}"
 fi
 
 # ------------------------------------------------------------------------------
 # 2. Build and Install Shared Library & Binaries
 # ------------------------------------------------------------------------------
-echo -e "\n${BLUE}[2/5] Compiling interceptor shared library...${NC}"
+echo -e "\n${BLUE}[2/5] Compiling interceptor shared library and installing binaries...${NC}"
+chmod +x "$SCRIPT_DIR/bin/"*
 make -C "$SCRIPT_DIR" build
 make -C "$SCRIPT_DIR" install
 
@@ -83,50 +93,77 @@ make -C "$SCRIPT_DIR" install
 mkdir -p -m 01777 /dev/shm/.clean_send
 chmod 01777 /dev/shm/.clean_send
 
-# ------------------------------------------------------------------------------
-# 3. Application Wrappers & Environment Setup
-# ------------------------------------------------------------------------------
-echo -e "\n${BLUE}[3/5] Setting up application wrappers & environment...${NC}"
+# Remove legacy global profile/environment preloads to protect system stability
+rm -f /etc/environment.d/50-cleanupload.conf
+rm -f /etc/profile.d/cleanupload.sh
 
-# Chrome wrappers
+# ------------------------------------------------------------------------------
+# 3. Application Wrappers (Targeted & Dynamic)
+# ------------------------------------------------------------------------------
+echo -e "\n${BLUE}[3/5] Setting up application wrappers...${NC}"
+
+# Chrome / Chromium wrapper
 cat << 'WRAPPER' > /usr/local/bin/google-chrome-stable
 #!/usr/bin/env bash
-export LD_PRELOAD="/usr/local/lib/libcleanupload.so${LD_PRELOAD:+:$LD_PRELOAD}"
-exec /usr/bin/google-chrome-stable "$@"
+REAL_BIN=""
+for path in /usr/bin/google-chrome-stable /opt/google/chrome/google-chrome /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do
+    if [[ -x "$path" && "$path" != "/usr/local/bin/google-chrome-stable" ]]; then
+        REAL_BIN="$path"
+        break
+    fi
+done
+if [[ -n "$REAL_BIN" ]]; then
+    export LD_PRELOAD="/usr/local/lib/libcleanupload.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    exec "$REAL_BIN" "$@"
+fi
+exit 1
 WRAPPER
-chmod +x /usr/local/bin/google-chrome-stable
+chmod 755 /usr/local/bin/google-chrome-stable
 ln -sf /usr/local/bin/google-chrome-stable /usr/local/bin/google-chrome
 
 # Discord wrapper
 cat << 'WRAPPER' > /usr/local/bin/discord
 #!/usr/bin/env bash
-export LD_PRELOAD="/usr/local/lib/libcleanupload.so${LD_PRELOAD:+:$LD_PRELOAD}"
-exec /usr/bin/discord "$@"
+REAL_BIN=""
+for path in /usr/bin/discord /opt/discord/Discord /usr/share/discord/Discord; do
+    if [[ -x "$path" && "$path" != "/usr/local/bin/discord" ]]; then
+        REAL_BIN="$path"
+        break
+    fi
+done
+if [[ -n "$REAL_BIN" ]]; then
+    export LD_PRELOAD="/usr/local/lib/libcleanupload.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    exec "$REAL_BIN" "$@"
+fi
+exit 1
 WRAPPER
-chmod +x /usr/local/bin/discord
+chmod 755 /usr/local/bin/discord
 
 # Telegram wrapper
 cat << 'WRAPPER' > /usr/local/bin/telegram-desktop
 #!/usr/bin/env bash
-export LD_PRELOAD="/usr/local/lib/libcleanupload.so${LD_PRELOAD:+:$LD_PRELOAD}"
-if [[ -x /usr/bin/telegram-desktop ]]; then
-    exec /usr/bin/telegram-desktop "$@"
+REAL_BIN=""
+for path in /usr/bin/telegram-desktop /opt/telegram/Telegram /opt/Telegram/Telegram; do
+    if [[ -x "$path" && "$path" != "/usr/local/bin/telegram-desktop" ]]; then
+        REAL_BIN="$path"
+        break
+    fi
+done
+if [[ -n "$REAL_BIN" ]]; then
+    export LD_PRELOAD="/usr/local/lib/libcleanupload.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    exec "$REAL_BIN" "$@"
 fi
-exit 0
+exit 1
 WRAPPER
-chmod +x /usr/local/bin/telegram-desktop
+chmod 755 /usr/local/bin/telegram-desktop
 
-# Global session environment
-mkdir -p /etc/environment.d
-echo 'LD_PRELOAD="/usr/local/lib/libcleanupload.so"' > /etc/environment.d/50-cleanupload.conf
-
-cat << 'ENV' > /etc/profile.d/cleanupload.sh
-export LD_PRELOAD="/usr/local/lib/libcleanupload.so${LD_PRELOAD:+:$LD_PRELOAD}"
-ENV
-chmod 644 /etc/profile.d/cleanupload.sh
+# Install Desktop Application Entry
+if [[ -d /usr/share/applications ]]; then
+    install -m 644 "$SCRIPT_DIR/desktop/SafeSend.desktop" /usr/share/applications/
+fi
 
 # ------------------------------------------------------------------------------
-# 4. User Drop-Zone, Nemo Action & Systemd Services
+# 4. User Drop-Zone, File Manager Actions & Systemd Services
 # ------------------------------------------------------------------------------
 echo -e "\n${BLUE}[4/5] Configuring user SafeSend drop-zone and services...${NC}"
 
@@ -137,19 +174,31 @@ if [[ -n "$USER_HOME" && -d "$USER_HOME" && "$TARGET_USER" != "root" ]]; then
     cat << 'README' > "$DROP_DIR/README.txt"
 SafeSend Drop-Zone
 ===================
-1. Drag any photo, video, PDF, or document here to clean metadata.
-2. Metadata is stripped automatically.
+1. Drag any photo, video, PDF, or document here.
+2. Metadata (GPS, camera serials, author, company) is stripped in-place automatically.
 3. Drag it directly into Discord, Telegram, or your Browser.
-4. Once uploaded, the file is automatically purged.
-No duplicate files are ever kept.
+Your files remain available on your desktop until you choose to move or delete them.
 README
     chown -R "${TARGET_USER}:${TARGET_USER}" "$DROP_DIR"
 
-    # Nemo context action
+    # Nemo context action (Cinnamon)
     NEMO_DIR="$USER_HOME/.local/share/nemo/actions"
     mkdir -p "$NEMO_DIR"
     cp "$SCRIPT_DIR/desktop/safesend.nemo_action" "$NEMO_DIR/"
     chown -R "${TARGET_USER}:${TARGET_USER}" "$USER_HOME/.local/share/nemo"
+
+    # Nautilus context script (GNOME)
+    NAUTILUS_DIR="$USER_HOME/.local/share/nautilus/scripts"
+    mkdir -p "$NAUTILUS_DIR"
+    cp "$SCRIPT_DIR/desktop/safesend.nautilus_script" "$NAUTILUS_DIR/Safe Send (Strip Metadata & Copy)"
+    chmod +x "$NAUTILUS_DIR/Safe Send (Strip Metadata & Copy)"
+    chown -R "${TARGET_USER}:${TARGET_USER}" "$USER_HOME/.local/share/nautilus"
+
+    # Dolphin context menu (KDE Plasma)
+    DOLPHIN_DIR="$USER_HOME/.local/share/kio/servicemenus"
+    mkdir -p "$DOLPHIN_DIR"
+    cp "$SCRIPT_DIR/desktop/safesend.dolphin_servicemenu" "$DOLPHIN_DIR/safesend.desktop"
+    chown -R "${TARGET_USER}:${TARGET_USER}" "$USER_HOME/.local/share/kio"
 
     # User systemd service directory
     USER_SYSTEMD="$USER_HOME/.config/systemd/user"
@@ -157,7 +206,7 @@ README
     cp "$SCRIPT_DIR/systemd/safesend-watcher.service" "$USER_SYSTEMD/"
     cp "$SCRIPT_DIR/systemd/safesend-clipboard.service" "$USER_SYSTEMD/"
 
-    # Portal override
+    # Portal override (hooks GTK file pickers for all native, Flatpak & Snap apps)
     PORTAL_OVERRIDE="$USER_SYSTEMD/xdg-desktop-portal-gtk.service.d"
     mkdir -p "$PORTAL_OVERRIDE"
     cp "$SCRIPT_DIR/systemd/xdg-desktop-portal-gtk.service.d/override.conf" "$PORTAL_OVERRIDE/"
@@ -177,14 +226,14 @@ fi
 # 5. Verification & Tests
 # ------------------------------------------------------------------------------
 echo -e "\n${BLUE}[5/5] Running verification tests...${NC}"
-python3 "$SCRIPT_DIR/tests/test_clean.py" || true
+python3 "$SCRIPT_DIR/tests/test_clean.py"
 
 echo -e "\n${BOLD}${GREEN}================================================================${NC}"
-echo -e "${BOLD}${GREEN}  ExifCleaner AutoSend Successfully Installed!${NC}"
+echo -e "${BOLD}${GREEN}  SafeSend Successfully Installed!${NC}"
 echo -e "${BOLD}${GREEN}================================================================${NC}"
-echo -e "You can now share files with automatic metadata cleaning:"
+echo -e "You can now share files with automatic, zero-duplicate metadata cleaning:"
 echo -e "  • ${BOLD}File Picker (+):${NC} Attach files in Chrome, Discord, or Telegram normally."
 echo -e "  • ${BOLD}Drag & Drop:${NC} Drag directly into Discord, Telegram, or Browser chat."
 echo -e "  • ${BOLD}Drop-Zone:${NC} Drop files into ${BOLD}~/Desktop/SafeSend${NC}."
-echo -e "  • ${BOLD}Right-Click:${NC} Nemo Context Menu -> 'Safe Send'."
+echo -e "  • ${BOLD}Right-Click:${NC} Context Menu -> 'Safe Send (Strip Metadata & Copy)'."
 echo -e "\nCheck status anytime: ${BOLD}safesend --status${NC}\n"

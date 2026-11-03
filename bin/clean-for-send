@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# ExifCleaner Automated Metadata Sanitizer for Uploads
+# ==============================================================================
+# SafeSend - Universal Lossless Metadata Sanitizer
+# Strips metadata across images, documents, audio, and video containers.
+# Preserves original content while eliminating GPS, author, and hardware traces.
+# ==============================================================================
 set -euo pipefail
 
 FILE="${1:-}"
@@ -8,26 +12,180 @@ if [[ -z "$FILE" || ! -f "$FILE" ]]; then
     exit 0
 fi
 
-# Detect ExifCleaner bundled exiftool or system exiftool
-EXIFTOOL="/opt/ExifCleaner/resources/nix/bin/exiftool"
-if [[ ! -x "$EXIFTOOL" ]]; then
-    EXIFTOOL="$(command -v exiftool || true)"
+# Locate exiftool
+EXIFTOOL="$(command -v exiftool || true)"
+if [[ -z "$EXIFTOOL" && -x "/opt/ExifCleaner/resources/nix/bin/exiftool" ]]; then
+    EXIFTOOL="/opt/ExifCleaner/resources/nix/bin/exiftool"
 fi
 
-if [[ -z "$EXIFTOOL" || ! -x "$EXIFTOOL" ]]; then
-    echo "ExifTool not found, skipping clean" >&2
+FFMPEG="$(command -v ffmpeg || true)"
+PYTHON="$(command -v python3 || true)"
+QPDF="$(command -v qpdf || true)"
+
+FILENAME="$(basename "$FILE")"
+EXT="${FILENAME##*.}"
+EXT_LOWER="$(echo "$EXT" | tr '[:upper:]' '[:lower:]')"
+
+# ------------------------------------------------------------------------------
+# 1. Media: Audio & Video (.mp4, .mkv, .avi, .webm, .mov, .mp3, .wav, .flac, etc.)
+# ------------------------------------------------------------------------------
+case "$EXT_LOWER" in
+    mp4|m4v|mov|mkv|avi|webm|mp3|wav|ogg|flac|aac|m4a|opus)
+        if [[ -n "$FFMPEG" ]]; then
+            TMP_OUT="${FILE}.tmp_clean.${EXT_LOWER}"
+            if "$FFMPEG" -y -nostdin -loglevel error -i "$FILE" -map_metadata -1 -c copy "$TMP_OUT" 2>/dev/null; then
+                if [[ -s "$TMP_OUT" ]]; then
+                    mv -f "$TMP_OUT" "$FILE"
+                else
+                    rm -f "$TMP_OUT"
+                fi
+            else
+                rm -f "$TMP_OUT"
+            fi
+        fi
+        # Exiftool pass for QuickTime/MP4 tags if supported
+        if [[ -n "$EXIFTOOL" && ("$EXT_LOWER" == "mp4" || "$EXT_LOWER" == "mov" || "$EXT_LOWER" == "m4v") ]]; then
+            "$EXIFTOOL" -overwrite_original -all= -P -q -q "$FILE" 2>/dev/null || true
+        fi
+        exit 0
+        ;;
+esac
+
+# ------------------------------------------------------------------------------
+# 2. Office Documents (.docx, .xlsx, .pptx, .odt, .ods, .odp)
+# ------------------------------------------------------------------------------
+case "$EXT_LOWER" in
+    docx|xlsx|pptx|odt|ods|odp)
+        if [[ -n "$PYTHON" ]]; then
+            "$PYTHON" - "$FILE" "$EXT_LOWER" << 'EOF'
+import sys, os, zipfile, tempfile, shutil
+
+path = sys.argv[1]
+ext = sys.argv[2]
+
+if not os.path.isfile(path) or not zipfile.is_zipfile(path):
+    sys.exit(0)
+
+clean_core_xml = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/coreProperties" xmlns:dc="http://purl.org/dc/elements/1.1/"></cp:coreProperties>'
+clean_odt_meta = b'<?xml version="1.0" encoding="UTF-8"?>\n<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" office:version="1.2"><office:meta></office:meta></office:document-meta>'
+
+tmp_dir = tempfile.mkdtemp(prefix="safesend_doc_")
+tmp_out = os.path.join(tmp_dir, "clean_" + os.path.basename(path))
+
+try:
+    with zipfile.ZipFile(path, 'r') as zin, zipfile.ZipFile(tmp_out, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            fname = item.filename
+            if fname in ('docProps/core.xml', 'docProps/custom.xml'):
+                zout.writestr(fname, clean_core_xml)
+            elif fname == 'docProps/app.xml':
+                # Empty Application metadata properties
+                empty_app = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"></Properties>'
+                zout.writestr(fname, empty_app)
+            elif fname == 'meta.xml':
+                zout.writestr(fname, clean_odt_meta)
+            else:
+                zout.writestr(item, zin.read(fname))
+    
+    if os.path.exists(tmp_out) and os.path.getsize(tmp_out) > 0:
+        shutil.move(tmp_out, path)
+finally:
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+EOF
+        fi
+        exit 0
+        ;;
+esac
+
+# ------------------------------------------------------------------------------
+# 3. PDF Documents (.pdf)
+# ------------------------------------------------------------------------------
+if [[ "$EXT_LOWER" == "pdf" ]]; then
+    # Pass 1: ExifTool stripping
+    if [[ -n "$EXIFTOOL" ]]; then
+        "$EXIFTOOL" -overwrite_original -Title= -Author= -Subject= -Keywords= -Creator= -Producer= -CreationDate= -ModDate= -all= -P -q -q "$FILE" 2>/dev/null || true
+    fi
+
+    # Pass 2: QPDF object linearization / orphan purge if available
+    if [[ -n "$QPDF" ]]; then
+        TMP_PDF="${FILE}.tmp_clean.pdf"
+        if "$QPDF" --linearize "$FILE" "$TMP_PDF" 2>/dev/null && [[ -s "$TMP_PDF" ]]; then
+            mv -f "$TMP_PDF" "$FILE"
+        else
+            rm -f "$TMP_PDF"
+        fi
+    fi
+
+    # Pass 3: Python PDF stream cleaner to eliminate incremental author leaks
+    if [[ -n "$PYTHON" ]]; then
+        "$PYTHON" - "$FILE" << 'EOF'
+import sys, re, os
+
+path = sys.argv[1]
+if not os.path.isfile(path):
+    sys.exit(0)
+
+try:
+    with open(path, 'rb') as f:
+        data = f.read()
+
+    pattern = re.compile(rb'(\d+\s+\d+\s+obj\s*<<)(.*?)(>>\s*endobj)', re.DOTALL)
+    def repl(m):
+        inner = m.group(2)
+        if any(tag in inner for tag in [b'/Title', b'/Author', b'/Creator', b'/Producer', b'/CreationDate', b'/ModDate']):
+            cleaned = re.sub(rb'/(Title|Author|Creator|Producer|CreationDate|ModDate|Subject|Keywords)\s*(\(.*?\)|<.*?>)', rb'', inner)
+            return m.group(1) + cleaned + m.group(3)
+        return m.group(0)
+
+    cleaned_data = pattern.sub(repl, data)
+    cleaned_data = re.sub(rb'/Metadata\s+\d+\s+\d+\s+R', rb'', cleaned_data)
+
+    if cleaned_data != data:
+        with open(path, 'wb') as f:
+            f.write(cleaned_data)
+except Exception:
+    pass
+EOF
+    fi
     exit 0
 fi
 
-# Strip all metadata losslessly
-# -overwrite_original: don't create _original backup file
-# -all=: strip all standard metadata (EXIF, GPS, IPTC, XMP, MakerNotes, comments)
-# -P: preserve file timestamps if needed
-"$EXIFTOOL" -overwrite_original -all= -P -q -q "$FILE" 2>/dev/null || true
+# ------------------------------------------------------------------------------
+# 4. Standard Images (.jpg, .jpeg, .png, .webp, .tiff, .gif, .bmp, .heic, .avif)
+# ------------------------------------------------------------------------------
+if [[ -n "$EXIFTOOL" ]]; then
+    # -all=: strip EXIF, GPS, IPTC, XMP, MakerNotes, comments
+    # -tagsFromFile @ -ColorSpaceTags: preserve ICC color profile so colors stay vibrant
+    # -P: preserve file filesystem timestamps
+    "$EXIFTOOL" -overwrite_original -all= -tagsFromFile @ -ColorSpaceTags -P -q -q "$FILE" 2>/dev/null || \
+    "$EXIFTOOL" -overwrite_original -all= -P -q -q "$FILE" 2>/dev/null || true
+else
+    echo "Warning: ExifTool is not installed. Image metadata stripping skipped." >&2
+    exit 1
+fi
 
-# For PDFs: also strip PDF document catalog info & XMP
-if [[ "${FILE,,}" == *.pdf ]]; then
-    "$EXIFTOOL" -overwrite_original -Title= -Author= -Subject= -Keywords= -Creator= -Producer= -CreationDate= -ModDate= -all= -q -q "$FILE" 2>/dev/null || true
+# ------------------------------------------------------------------------------
+# 5. SVG Images (.svg)
+# ------------------------------------------------------------------------------
+if [[ "$EXT_LOWER" == "svg" && -n "$PYTHON" ]]; then
+    "$PYTHON" - "$FILE" << 'EOF'
+import sys, re, os
+
+path = sys.argv[1]
+try:
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+
+    # Remove <metadata>...</metadata> blocks and RDF blocks
+    cleaned = re.sub(r'<metadata[\s\S]*?</metadata>', '', content, flags=re.IGNORECASE)
+    cleaned = re.sub(r'<rdf:RDF[\s\S]*?</rdf:RDF>', '', cleaned, flags=re.IGNORECASE)
+
+    if cleaned != content:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(cleaned)
+except Exception:
+    pass
+EOF
 fi
 
 exit 0

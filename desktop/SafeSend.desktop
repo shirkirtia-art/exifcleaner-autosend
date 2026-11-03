@@ -2,8 +2,8 @@
 Version=1.0
 Type=Application
 Name=SafeSend Drop-Zone
-Comment=Drop files here to clean metadata on-the-fly and auto-purge once sent
-Exec=nemo %h/Desktop/SafeSend
+Comment=Drop files here to sanitize metadata on-the-fly before uploading
+Exec=sh -c 'mkdir -p "$HOME/Desktop/SafeSend" && xdg-open "$HOME/Desktop/SafeSend"'
 Icon=security-high
 Terminal=false
 Categories=Utility;Graphics;Security;

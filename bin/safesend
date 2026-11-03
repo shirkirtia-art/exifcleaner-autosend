@@ -1,20 +1,35 @@
 #!/usr/bin/env bash
+# ==============================================================================
 # SafeSend CLI - ExifCleaner Automation Suite
+# Clean metadata on-the-fly and prepare files for safe upload without duplicates.
+# ==============================================================================
 set -euo pipefail
 
 usage() {
-    echo "Usage: safesend [OPTION] [FILE]"
-    echo "Clean metadata on-the-fly and prepare for safe upload without keeping duplicates."
+    echo "Usage: safesend [OPTION] [FILE...]"
+    echo "Clean metadata on-the-fly and prepare for safe sharing without keeping duplicates."
     echo ""
     echo "Options:"
-    echo "  --status      Check status of SafeSend auto-clean automation services"
-    echo "  --clean FILE  Clean a file in-place"
-    echo "  --send FILE   Prepare ephemeral cleaned file and copy to clipboard"
-    echo "  --help        Display this help message"
+    echo "  --status           Check status of SafeSend auto-clean automation services"
+    echo "  --doctor           Run thorough diagnostics on dependencies and services"
+    echo "  --clean FILE...    Clean one or more files in-place"
+    echo "  --send FILE...     Prepare ephemeral cleaned copy and load onto clipboard"
+    echo "  --clear            Clear ephemeral RAM cache and Desktop SafeSend drop-zone"
+    echo "  --help, -h         Display this help message"
     echo ""
-    echo "Drop-Zone: Drag any file to ~/Desktop/SafeSend to auto-clean and auto-purge after send."
+    echo "Drop-Zone: Drag any file to ~/Desktop/SafeSend to sanitize metadata instantly."
     exit 0
 }
+
+CLEAN_BIN="/usr/local/bin/clean-for-send"
+if [[ ! -x "$CLEAN_BIN" ]]; then
+    CLEAN_BIN="$(dirname "$(realpath "$0")")/clean-for-send"
+fi
+
+CLIP_BIN="/usr/local/bin/clean-clipboard-send"
+if [[ ! -x "$CLIP_BIN" ]]; then
+    CLIP_BIN="$(dirname "$(realpath "$0")")/clean-clipboard-send"
+fi
 
 cmd="${1:-}"
 
@@ -22,58 +37,134 @@ if [[ -z "$cmd" || "$cmd" == "--help" || "$cmd" == "-h" ]]; then
     usage
 elif [[ "$cmd" == "--status" ]]; then
     echo "=== SafeSend & ExifCleaner Automation Status ==="
-    echo -n "1. GTK / Syscall Interceptor:     "
+    echo -n "1. GTK / Portal Interceptor:      "
     if [[ -f /usr/local/lib/libcleanupload.so ]]; then
         echo "Active (/usr/local/lib/libcleanupload.so)"
     else
-        echo "Missing!"
+        echo "Missing (/usr/local/lib/libcleanupload.so)"
     fi
-    echo -n "2. Portal Daemon Integration:     "
+
+    echo -n "2. Portal Daemon Override:        "
     if systemctl --user is-active xdg-desktop-portal-gtk.service >/dev/null 2>&1; then
-        echo "Running"
+        echo "Running (xdg-desktop-portal-gtk)"
     else
-        echo "Inactive"
+        echo "Inactive / Not started"
     fi
+
     echo -n "3. Desktop SafeSend Drop-Zone:    "
     if systemctl --user is-active safesend-watcher.service >/dev/null 2>&1; then
         echo "Running (~/Desktop/SafeSend)"
     else
         echo "Inactive"
     fi
+
     echo -n "4. Clipboard Auto-Sanitizer:      "
     if systemctl --user is-active safesend-clipboard.service >/dev/null 2>&1; then
         echo "Running (Screenshots & Copied Files)"
     else
         echo "Inactive"
     fi
-    echo -n "5. Core Cleaning Engine:          "
-    if [[ -x /usr/local/bin/clean-for-send ]]; then
-        echo "Ready (ExifTool / ExifCleaner)"
+
+    echo -n "5. Core Multi-Format Engine:      "
+    if [[ -x "$CLEAN_BIN" ]]; then
+        echo "Ready (Images, Documents, Audio/Video)"
     else
-        echo "Missing!"
+        echo "Missing ($CLEAN_BIN)"
+    fi
+
+    echo -n "6. Ephemeral RAM Staging:         "
+    if [[ -d /dev/shm/.clean_send ]]; then
+        COUNT="$(find /dev/shm/.clean_send -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+        echo "Ready (/dev/shm/.clean_send, ${COUNT} active sessions)"
+    else
+        echo "Ready (Will be initialized on demand)"
     fi
     echo "================================================"
     exit 0
+elif [[ "$cmd" == "--doctor" ]]; then
+    echo "=== SafeSend Health Check & Diagnostics ==="
+    echo "Operating System: $(uname -s) $(uname -r) ($(uname -m))"
+    echo ""
+    echo "1. Core Binary Tools:"
+    for tool in exiftool ffmpeg python3 xclip notify-send qpdf inotifywait fuser; do
+        path="$(command -v "$tool" || true)"
+        if [[ -n "$path" ]]; then
+            echo "   [✓] $tool: $path"
+        else
+            echo "   [!] $tool: NOT FOUND (optional or fallback used)"
+        fi
+    done
+    echo ""
+    echo "2. Shared Interceptor Library:"
+    if [[ -f /usr/local/lib/libcleanupload.so ]]; then
+        echo "   [✓] Library installed: /usr/local/lib/libcleanupload.so"
+        if python3 -c "import ctypes; ctypes.CDLL('/usr/local/lib/libcleanupload.so')" 2>/dev/null; then
+            echo "   [✓] Symbol linkage: PASS (Loads cleanly without undefined symbols)"
+        else
+            echo "   [✗] Symbol linkage: FAIL"
+        fi
+    else
+        echo "   [✗] Library missing: Run 'sudo make install'"
+    fi
+    echo ""
+    echo "3. Python GObject GUI Clipboard Support:"
+    if python3 -c "import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk" 2>/dev/null; then
+        echo "   [✓] PyGObject GTK 3.0: Available"
+    else
+        echo "   [✗] PyGObject GTK 3.0: Missing (Install python3-gi / gir1.2-gtk-3.0)"
+    fi
+    echo ""
+    echo "4. Inotify Kernel Watch Limits:"
+    max_watches="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo "unknown")"
+    echo "   [i] max_user_watches: $max_watches"
+    echo ""
+    echo "5. Active User Services:"
+    for srv in safesend-watcher safesend-clipboard xdg-desktop-portal-gtk; do
+        st="$(systemctl --user is-active "$srv.service" 2>/dev/null || echo "inactive")"
+        echo "   [i] $srv.service: $st"
+    done
+    echo "============================================"
+    exit 0
+elif [[ "$cmd" == "--clear" ]]; then
+    echo "Clearing ephemeral SafeSend cache..."
+    if [[ -d /dev/shm/.clean_send ]]; then
+        rm -rf /dev/shm/.clean_send/*
+        echo "Cleared /dev/shm/.clean_send"
+    fi
+    DROP_DIR="$HOME/Desktop/SafeSend"
+    if [[ -d "$DROP_DIR" ]]; then
+        find "$DROP_DIR" -mindepth 1 -not -name "README.txt" -delete 2>/dev/null || true
+        echo "Cleared ~/Desktop/SafeSend drop-zone"
+    fi
+    echo "Done."
+    exit 0
 elif [[ "$cmd" == "--clean" ]]; then
-    target="${2:-}"
-    if [[ -z "$target" || ! -f "$target" ]]; then
-        echo "Error: file not found: $target" >&2
+    shift
+    if [[ $# -eq 0 ]]; then
+        echo "Error: No files specified. Usage: safesend --clean <file1> [file2...]" >&2
         exit 1
     fi
-    /usr/local/bin/clean-for-send "$target"
-    echo "Cleaned metadata for: $target"
+    for target in "$@"; do
+        if [[ ! -f "$target" ]]; then
+            echo "Warning: File not found: $target" >&2
+            continue
+        fi
+        "$CLEAN_BIN" "$target"
+        echo "Cleaned metadata for: $target"
+    done
     exit 0
 elif [[ "$cmd" == "--send" ]]; then
-    target="${2:-}"
-    if [[ -z "$target" || ! -f "$target" ]]; then
-        echo "Error: file not found: $target" >&2
+    shift
+    if [[ $# -eq 0 ]]; then
+        echo "Error: No files specified. Usage: safesend --send <file1> [file2...]" >&2
         exit 1
     fi
-    /usr/local/bin/clean-clipboard-send "$target"
+    "$CLIP_BIN" "$@"
     exit 0
 elif [[ -f "$cmd" ]]; then
-    /usr/local/bin/clean-clipboard-send "$cmd"
+    "$CLIP_BIN" "$@"
     exit 0
 else
+    echo "Unknown option: $cmd" >&2
     usage
 fi
